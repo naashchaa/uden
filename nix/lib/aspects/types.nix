@@ -293,6 +293,19 @@ let
   # parametric branch has made no such split: every merged aspect carries
   # __functor, so lib.isFunction there would demote ordinary aspect-valued defs
   # to includes. Only a bare lambda can reach the module system as a module.
+  # A parametric definition coerced into an include is still the aspect's own
+  # body: its `excludes` belong to the aspect, not to an anonymous child of it.
+  # The marker tells constraint registration to use the owning aspect's chain.
+  ownBody =
+    f:
+    if builtins.isAttrs f then
+      f // { __ownBody = true; }
+    else
+      {
+        __functor = _: f;
+        __ownBody = true;
+      };
+
   coerceFnDefsWith =
     isFn:
     map (
@@ -301,7 +314,7 @@ let
         d
         // {
           value = {
-            includes = [ d.value ];
+            includes = [ (ownBody d.value) ];
           };
         }
       else
@@ -468,7 +481,10 @@ let
             d
             // {
               value =
-                d.value
+                # A wrapper publishes `_` as a read view of its own `provides`.
+                # The submodule's `_` alias would take it as a second `provides`
+                # definition and double every provides leaf.
+                (if (d.value._ or { }) ? __functor then builtins.removeAttrs d.value [ "_" ] else d.value)
                 # Only narrow what exists: a navigated child carries __aspectChain
                 # with no __contentValues, and inventing an empty one here makes
                 # the wrapper re-flatten to nothing instead of failing loudly.
@@ -533,7 +549,7 @@ let
                   d
                   // {
                     value = {
-                      includes = [ d.value.__fn ];
+                      includes = [ (ownBody d.value.__fn) ];
                     };
                   }
                 ) parametrics
@@ -880,8 +896,11 @@ let
         # this is not a place that reads absence as root.
         ownChain = if config.meta.aspect-chain == null then [ ] else config.meta.aspect-chain;
         childProviderPrefix = ownChain ++ [ config.name ];
+        # A strict aspect kind is closed: gen-schema's strict freeform replaces the open one
+        # rather than being merged with it.
+        strict = den ? schema && den.schema ? aspect && den.schema.aspect.isStrict;
       in
-      {
+      lib.optionalAttrs (!strict) {
         freeformType = lib.types.lazyAttrsOf (
           aspectKeyType (
             typeCfg
@@ -890,10 +909,14 @@ let
             }
           )
         );
+      }
+      // {
         imports = [
           (lib.mkAliasOptionModule [ "_" ] [ "provides" ])
           (den.schema.aspect or { })
-        ];
+        ]
+        ++ lib.optional strict (den.lib.schema.mkStrictModule "aspect")
+        ++ den.lib.schema.strictCompatModules strict;
         options = {
           name = lib.mkOption {
             description = "Aspect name";
@@ -963,7 +986,7 @@ let
     in
     lib.types.coercedTo (lib.types.addCheck lib.types.raw (
       v: builtins.isFunction v && !isSubmoduleFn v && lib.functionArgs v != { }
-    )) (fn: { includes = [ fn ]; }) pt;
+    )) (fn: { includes = [ (ownBody fn) ]; }) pt;
 
   aspectsType =
     typeCfg:

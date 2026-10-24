@@ -9,14 +9,16 @@ let
   # (_module.args collisions).
   # Build a collision-check validator module from a policy resolver and
   # the list of den arg names to check. Returns a module function that
-  # probes config._module.args for each name and emits warnings/errors.
+  # probes the _module.args option for each name and emits warnings/errors.
   mkCollisionValidator =
     policy: denArgNames: moduleArgs:
     let
       collisionChecks = lib.concatMap (
         name:
         let
-          mArgs = moduleArgs.config._module.args or { };
+          # The option, not config._module.args: under a freeformType, config
+          # is only available once `warnings` below has been merged.
+          mArgs = moduleArgs.options._module.args.value or { };
           hasReal =
             (builtins.tryEval (builtins.seq (mArgs.${name} or null) (mArgs ? ${name}))).value or false;
           p = policy name;
@@ -34,9 +36,14 @@ let
             "den: class module arg '${name}' collision — den-wins, module-system value shadowed"
           ]
       ) denArgNames;
+      # A target without a `warnings` option (e.g. a freeform settings
+      # submodule) gets the report as eval-time warnings instead.
+      report =
+        collisionChecks != [ ]
+        && (moduleArgs.options ? warnings || lib.foldr lib.warn false collisionChecks);
     in
     {
-      warnings = collisionChecks;
+      warnings = lib.mkIf report collisionChecks;
     };
 
   resolveCollisionPolicy =
@@ -168,9 +175,20 @@ let
         # root-class producer, a different member, or a thunk reading its
         # parentArg) — never for a pure same-member thunk, so standalone members
         # (no owner arg) keep working.
-        allMarkers = builtins.filter (v: v ? __configThunk) (
-          lib.concatMap (k: ctx.${k} or [ ]) denArgsWithThunks
-        );
+        # The thunk markers inside a value: a group marker (a pipe stage deferred
+        # over a list holding markers) contributes its members' markers, and a
+        # provenance-tagged value its inner marker.
+        markersOf =
+          v:
+          if v ? __group then
+            lib.concatMap markersOf v.__group
+          else if v ? __configThunk then
+            [ v ]
+          else if v ? __pv then
+            markersOf v.__pv
+          else
+            [ ];
+        allMarkers = lib.concatMap markersOf (lib.concatMap (k: ctx.${k} or [ ]) denArgsWithThunks);
         markerNeedsOwner =
           m:
           let
@@ -221,60 +239,68 @@ let
           let
             ownerCfg = if consumerNested then owner else config;
           in
-          builtins.concatMap (
-            v:
-            if v ? __configThunk then
-              let
-                thunkArgs = builtins.functionArgs v.__fn;
-                ctxArgs = lib.genAttrs (builtins.filter (k: ctx ? ${k}) (builtins.attrNames thunkArgs)) (
-                  k: ctx.${k}
-                );
-                pcls = v.__producerClass or null;
-                pPath = classParentPath pcls;
-                pArg = classParentArg pcls;
-                producerConfig =
-                  if pcls == null then
-                    config
-                  else if pPath == null then
-                    ownerCfg
-                  else if consumerNested && pcls == class && (v.__producerName or null) == consumerName then
-                    config
-                  else
-                    lib.attrByPath (pPath v.__producerName) { } ownerCfg;
-                # Defer evaluation if cross-host config is required but not yet available.
-                # Only defer if the consuming module system exposes its own identity
-                # (`config.identity`) AND it differs from the producer — i.e. the producer
-                # config lives on another host and cannot be resolved here. Otherwise
-                # (single-host, e.g. Nixidy) evaluate eagerly.
-                #
-                # NOTE: no consumer wires `config.identity` yet, so this guard is currently
-                # INERT (the eager branch always runs). It is the forward hook for the
-                # cross-host case; wiring + a covering fixture is a follow-up. See PR #625.
-              in
-              if
-                v.__producerName != null
-                && (ownerCfg.identity or null) != null
-                && v.__producerName != ownerCfg.identity
-              then
-                [ v ]
-              else
+          let
+            # A group marker resolves its members, then runs its deferred stage
+            # over them; a provenance-tagged marker resolves inside its tag.
+            resolveOne =
+              v:
+              if v ? __group then
+                v.__post (builtins.concatMap resolveOne v.__group)
+              else if v ? __pv && v.__pv ? __configThunk then
+                map (r: v // { __pv = r; }) (resolveOne v.__pv)
+              else if v ? __configThunk then
                 let
-                  result = v.__fn (
-                    ctxArgs
-                    // moduleArgs
-                    // {
-                      config = producerConfig;
-                    }
-                    // lib.optionalAttrs (pArg != null) { ${pArg} = ownerCfg; }
-                    // {
-                      inherit lib;
-                    }
+                  thunkArgs = builtins.functionArgs v.__fn;
+                  ctxArgs = lib.genAttrs (builtins.filter (k: ctx ? ${k}) (builtins.attrNames thunkArgs)) (
+                    k: ctx.${k}
                   );
+                  pcls = v.__producerClass or null;
+                  pPath = classParentPath pcls;
+                  pArg = classParentArg pcls;
+                  producerConfig =
+                    if pcls == null then
+                      config
+                    else if pPath == null then
+                      ownerCfg
+                    else if consumerNested && pcls == class && (v.__producerName or null) == consumerName then
+                      config
+                    else
+                      lib.attrByPath (pPath v.__producerName) { } ownerCfg;
+                  # Defer evaluation if cross-host config is required but not yet available.
+                  # Only defer if the consuming module system exposes its own identity
+                  # (`config.identity`) AND it differs from the producer — i.e. the producer
+                  # config lives on another host and cannot be resolved here. Otherwise
+                  # (single-host, e.g. Nixidy) evaluate eagerly.
+                  #
+                  # NOTE: no consumer wires `config.identity` yet, so this guard is currently
+                  # INERT (the eager branch always runs). It is the forward hook for the
+                  # cross-host case; wiring + a covering fixture is a follow-up. See PR #625.
                 in
-                if builtins.isList result then result else [ result ]
-            else
-              [ v ]
-          ) values;
+                if
+                  v.__producerName != null
+                  && (ownerCfg.identity or null) != null
+                  && v.__producerName != ownerCfg.identity
+                then
+                  [ v ]
+                else
+                  let
+                    result = v.__fn (
+                      ctxArgs
+                      // moduleArgs
+                      // {
+                        config = producerConfig;
+                      }
+                      // lib.optionalAttrs (pArg != null) { ${pArg} = ownerCfg; }
+                      // {
+                        inherit lib;
+                      }
+                    );
+                  in
+                  if builtins.isList result then result else [ result ]
+              else
+                [ v ];
+          in
+          builtins.concatMap resolveOne values;
       in
       if effectiveRemainingArgs == { } then
         {
@@ -311,7 +337,7 @@ let
             in
             warnedModule (classWinsDen // moduleArgs // resolvedDen);
           validatorAdvertisedArgs = effectiveRemainingArgs // {
-            config = true;
+            options = true;
           };
           validator = mkCollisionValidator policy denArgNames;
           advertisedArgs = effectiveRemainingArgs // lib.genAttrs classWinsNames (_: true);
@@ -352,7 +378,7 @@ let
     }
     // lib.optionalAttrs (result.wrapped && ctx != { }) {
       inherit validator;
-      validatorAdvertisedArgs.config = true;
+      validatorAdvertisedArgs.options = true;
       advertisedArgs = lib.genAttrs denArgNames (_: true);
     };
 

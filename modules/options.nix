@@ -18,7 +18,8 @@ let
   # and den.lib's map includes schema-util which reads den.schema._kindNames —
   # routing through den.lib here would close that cycle. Entity types consume it
   # lazily at eval time, so they safely use den.lib.schema.
-  schemaLib = import ./../nix/lib/schema.nix { inherit inputs lib; };
+  schemaLib = import ./../nix/lib/schema.nix { inherit inputs lib den; };
+  strictEntry = import ./../nix/lib/strict.nix { };
 
   # Element check for BOTH schema-tier collections. gen-schema has no
   # per-collection `type` to route a bad element through, so the check that the
@@ -104,19 +105,30 @@ in
   options.den.homes = types.homesOption;
   options.den.schema = schemaLib.mkSchemaOption {
     collections = {
+      # includes / excludes are policy over aspects, not the kind's shape: their
+      # elements may reach back into the instances the kind types (#719), so
+      # gen-schema must not read them into the kind's identity.
       includes = {
         default = [ ];
         merge = acc: val: acc ++ map (checkCollectionElement "includes") val;
+        identity = false;
       };
       excludes = {
         default = [ ];
         merge = acc: val: acc ++ map (checkCollectionElement "excludes") val;
+        identity = false;
       };
       isEntity = {
         default = false;
         merge = acc: val: acc || val;
       };
       isolated = {
+        default = false;
+        merge = acc: val: acc || val;
+      };
+      # Selects the kind's closed instance type (gen-schema's strict freeform)
+      # instead of the open one; see `den.lib.strict`.
+      isStrict = {
         default = false;
         merge = acc: val: acc || val;
       };
@@ -133,12 +145,27 @@ in
               "excludes"
               "isEntity"
               "isolated"
+              "isStrict"
               "parent"
               "collisionPolicy"
             ];
             stripped = if builtins.isAttrs v then builtins.removeAttrs v collectionKeys else v;
           in
           !builtins.isAttrs stripped || stripped != { }
+        ) defs;
+      # `imports = [ den.lib.strict ]` is the spelling from when it was a module.
+      isStrict =
+        collections.isStrict
+        || builtins.any (
+          d:
+          builtins.isAttrs d.value
+          && builtins.elem strictEntry (d.value.imports or [ ])
+          && lib.warn ''
+            den: `imports = [ den.lib.strict ]` on a schema entry is deprecated (in ${d.file or "an unknown file"}).
+            den.lib.strict is now a schema entry, not a module. Migrate:
+              - den.schema.<kind>.imports = [ den.lib.strict ];
+              + den.schema.<kind>.isStrict = true;   # or: den.schema.<kind> = den.lib.strict;
+          '' true
         ) defs;
     };
   };
@@ -176,19 +203,28 @@ in
         || throw "den.classes and den.quirks must not share keys, but found: ${builtins.concatStringsSep ", " overlap}";
       lib.mapAttrs (name: v: v // { inherit name; }) quirks;
   };
-  # nixpkgs `lib` as a module argument for every schema kind. gen's module
-  # system deliberately ships no nixpkgs lib — it has its own types — so a
-  # schema module written `{ host, lib, ... }:` gets
-  # `module argument `lib' is not defined` unless den supplies it. That shape
-  # is den's documented one and predates gen-schema, so den injects it rather
-  # than asking gen to default to it or rewriting the docs.
-  #
-  # On `conf` because every kind imports it, so this is one site rather than
-  # one per kind.
-  config.den.schema.conf._module.args.lib = lib;
+  # An instance's own `includes` / `excludes` are read by `resolveEntity` for
+  # every kind, so `conf` declares them for every kind that inherits it. Left
+  # undeclared, only the open instance type accepted them and a strict kind
+  # refused den's own instance-level key. `listOf raw` is not a primitive type,
+  # so gen-schema keeps both out of the instance identity.
+  config.den.schema.conf.imports = [
+    {
+      options.includes = lib.mkOption {
+        description = "Aspects and policies included for this instance only.";
+        type = lib.types.listOf lib.types.raw;
+        default = [ ];
+      };
+      options.excludes = lib.mkOption {
+        description = "Aspects and policies excluded from this instance's subtree.";
+        type = lib.types.listOf lib.types.raw;
+        default = [ ];
+      };
+    }
+  ];
   config.den.schema.fleet = { };
-  config.den.schema.host.imports = [ den.schema.conf ];
-  config.den.schema.user.imports = [ den.schema.conf ];
+  config.den.schema.host.inherits = [ den.schema.conf ];
+  config.den.schema.user.inherits = [ den.schema.conf ];
   # `home` keys its identity on the registry key plus the system. `name` IS the
   # registry key and gen-schema injects it as an identity key by construction,
   # so only `system` needs declaring — and it has to be declared HERE because
@@ -207,8 +243,8 @@ in
   # `visible` not being read, which is an implementation fact rather than a
   # documented contract — if gen-schema ever folds `visible` into the same
   # presentation exclusion, this key silently leaves the identity set.
+  config.den.schema.home.inherits = [ den.schema.conf ];
   config.den.schema.home.imports = [
-    den.schema.conf
     {
       options.system = lib.mkOption {
         type = lib.types.str;
