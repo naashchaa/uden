@@ -11,5 +11,9 @@ pkgs.mkShell {
     pnpm
     nodejs
     hyperfine
+
+    # docs
+    sphinx
+    sphinx-autobuild
   ];
 }
