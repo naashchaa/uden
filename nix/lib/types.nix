@@ -36,7 +36,7 @@ let
             if lib.hasSuffix "darwin" config.system then
               "darwin"
             else
-              (if lib.hasSuffix "nixOnDroid" then "nixOnDroid" else "nixos")
+              (if lib.hasSuffix "nixOnDroid" config.system then "nixOnDroid" else "nixos")
           );
           aspect = strOpt "main aspect name of <class>" config.name;
           description = strOpt "host description" "${config.class}.${config.hostName}@${config.system}";
