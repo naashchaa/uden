@@ -19,6 +19,8 @@ let
           host.instantiate {
             modules = [
               module
+              lib.optionalAttrs
+              (!host.isNixOnDroid)
               { nixpkgs.hostPlatform = lib.mkDefault host.system; }
             ];
           }
