@@ -72,10 +72,12 @@ let
                 systemManager = inputs.system-manager.lib.makeSystemConfig;
                 nixOnDroid =
                   modules:
-                  inputs.nix-on-droid.lib.nixOnDroidConfiguration modules
-                  // lib.optionalAttrs config.isNixOnDroid {
-                    pkgs = import inputs.nixpkgs { system = "aarch64-linux"; };
-                  };
+                  inputs.nix-on-droid.lib.nixOnDroidConfiguration (
+                    modules
+                    // lib.optionalAttrs config.isNixOnDroid {
+                      pkgs = import inputs.nixpkgs { system = "aarch64-linux"; };
+                    }
+                  );
               }
               .${config.class};
           };
