@@ -32,8 +32,12 @@ let
           name = strOpt "host configuration name" name;
           hostName = strOpt "Network hostname" config.name;
           system = strOpt "platform system" system;
+          isNixOnDroid = boolOpt "whether the host is a nix-on-droid system" false;
           class = strOpt "os-configuration nix class for host" (
-            if lib.hasSuffix "darwin" config.system then "darwin" else "nixos"
+            if lib.hasSuffix "darwin" config.system then
+              "darwin"
+            else
+              (if config.isNixOnDroid then "nixOnDroid" else "nixos")
           );
           aspect = strOpt "main aspect name of <class>" config.name;
           description = strOpt "host description" "${config.class}.${config.hostName}@${config.system}";
@@ -51,6 +55,7 @@ let
               `darwin`: inputs.darwin.lib.darwinSystem
               `nixos`:  inputs.nixpkgs.lib.nixosSystem
               `systemManager`: inputs.system-manager.lib.makeSystemConfig
+              `nixOnDroid`: inputs.nix-on-droid.lib.nixOnDroidConfiguration
 
               Set explicitly if you need:
 
@@ -65,6 +70,14 @@ let
                 nixos = inputs.nixpkgs.lib.nixosSystem;
                 darwin = inputs.darwin.lib.darwinSystem;
                 systemManager = inputs.system-manager.lib.makeSystemConfig;
+                nixOnDroid =
+                  modules:
+                  inputs.nix-on-droid.lib.nixOnDroidConfiguration (
+                    modules
+                    // lib.optionalAttrs config.isNixOnDroid {
+                      pkgs = import inputs.nixpkgs { system = "aarch64-linux"; };
+                    }
+                  );
               }
               .${config.class};
           };
@@ -93,6 +106,10 @@ let
                 ];
                 systemManager = [
                   "systemConfigs"
+                  config.name
+                ];
+                nixOnDroid = [
+                  "nixOnDroidConfigurations"
                   config.name
                 ];
               }
@@ -141,6 +158,13 @@ let
     description: default:
     lib.mkOption {
       type = lib.types.str;
+      inherit description default;
+    };
+
+  boolOpt =
+    description: default:
+    lib.mkOption {
+      type = lib.types.bool;
       inherit description default;
     };
 
@@ -207,9 +231,9 @@ let
             description = ''
               nixpkgs instance used to build the home configuration.
             '';
-            example = lib.literalExpression ''inputs.nixpkgs.legacyPackages.''${home.system}'';
+            example = lib.literalExpression "inputs.nixpkgs.legacyPackages.\${home.system}";
             type = lib.types.raw;
-            defaultText = lib.literalExpression ''inputs.nixpkgs.legacyPackages.''${home.system}'';
+            defaultText = lib.literalExpression "inputs.nixpkgs.legacyPackages.\${home.system}";
             default = inputs.nixpkgs.legacyPackages.${config.system};
           };
           instantiate = lib.mkOption {
