@@ -70,7 +70,12 @@ let
                 nixos = inputs.nixpkgs.lib.nixosSystem;
                 darwin = inputs.darwin.lib.darwinSystem;
                 systemManager = inputs.system-manager.lib.makeSystemConfig;
-                nixOnDroid = inputs.nix-on-droid.lib.nixOnDroidConfiguration;
+                nixOnDroid =
+                  modules:
+                  inputs.nix-on-droid.lib.nixOnDroidConfiguration modules
+                  // lib.optionalAttrs config.isNixOnDroid {
+                    pkgs = import inputs.nixpkgs { system = "aarch64-linux"; };
+                  };
               }
               .${config.class};
           };
