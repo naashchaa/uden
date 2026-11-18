@@ -32,11 +32,12 @@ let
           name = strOpt "host configuration name" name;
           hostName = strOpt "Network hostname" config.name;
           system = strOpt "platform system" system;
+          isNixOnDroid = boolOpt "whether the host is a nix-on-droid system" false;
           class = strOpt "os-configuration nix class for host" (
             if lib.hasSuffix "darwin" config.system then
               "darwin"
             else
-              (if lib.hasSuffix "nixOnDroid" config.system then "nixOnDroid" else "nixos")
+              (if config.isNixOnDroid then "nixOnDroid" else "nixos")
           );
           aspect = strOpt "main aspect name of <class>" config.name;
           description = strOpt "host description" "${config.class}.${config.hostName}@${config.system}";
@@ -150,6 +151,13 @@ let
     description: default:
     lib.mkOption {
       type = lib.types.str;
+      inherit description default;
+    };
+
+  boolOpt =
+    description: default:
+    lib.mkOption {
+      type = lib.types.bool;
       inherit description default;
     };
 
