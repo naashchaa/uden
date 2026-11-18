@@ -18,7 +18,7 @@ let
       }
       ```
 
-    Same applies to `homeConfigurations`, `packages`, or any other 
+    Same applies to `homeConfigurations`, `packages`, or any other
     flake output attribute that might need merge-semantics for
     multiple values.
 
@@ -35,7 +35,7 @@ let
       }
       ```
 
-    See also flake-parts related error messaage: 
+    See also flake-parts related error messaage:
     https://github.com/hercules-ci/flake-parts/blob/main/modules/flake.nix
   '';
 
@@ -43,6 +43,7 @@ let
     "nixosConfigurations"
     "darwinConfigurations"
     "homeConfigurations"
+    "nixOnDroidConfigurations"
   ];
 
   systemNames = [
